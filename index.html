@@ -359,6 +359,8 @@ select { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 
 const BASE = 'https://api.mangadex.org';
+// Proxy CORS pour contourner les restrictions GitHub Pages
+const P = (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
 
 function extractId(input) {
   input = (input || '').trim();
@@ -391,7 +393,7 @@ function showProgress(v) {
 // ── MANGADEX API ──────────────────────────────────────────────────────────────
 
 async function getMangaInfo(id) {
-  const r = await fetch(`${BASE}/manga/${id}?includes[]=cover_art`);
+  const r = await fetch(P(`${BASE}/manga/${id}?includes[]=cover_art`));
   if (!r.ok) throw new Error(`Manga introuvable — vérifie l'ID (${r.status})`);
   const j = await r.json();
   if (!j.data) throw new Error('Réponse API invalide');
@@ -409,7 +411,7 @@ async function getChapters(mangaId, lang) {
   while (true) {
     // MangaDex API requires repeated params for arrays, URLSearchParams doesn't handle this correctly
     const url = `${BASE}/chapter?manga=${mangaId}&translatedLanguage[]=${lang}&limit=100&offset=${offset}&order[chapter]=asc`;
-    const r = await fetch(url);
+    const r = await fetch(P(url));
     if (!r.ok) throw new Error(`Erreur chapitres (${r.status})`);
     const j = await r.json();
     all = all.concat(j.data);
@@ -421,7 +423,7 @@ async function getChapters(mangaId, lang) {
 }
 
 async function getPages(chapterId, quality) {
-  const r = await fetch(`${BASE}/at-home/server/${chapterId}`);
+  const r = await fetch(P(`${BASE}/at-home/server/${chapterId}`));
   if (!r.ok) throw new Error(`Serveur images indispo (${r.status})`);
   const j = await r.json();
   const base = j.baseUrl;
@@ -432,7 +434,7 @@ async function getPages(chapterId, quality) {
 }
 
 async function urlToDataUrl(url) {
-  const r = await fetch(url);
+  const r = await fetch(P(url));
   if (!r.ok) throw new Error('Image inaccessible');
   const blob = await r.blob();
   return new Promise((res, rej) => {
