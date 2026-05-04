@@ -476,8 +476,8 @@ async function getChapters(mangaId, lang) {
 
 async function getPages(chapterId, quality) {
   const r = await apiFetch(`${BASE}/at-home/server/${chapterId}`);
-  if (!r.ok) throw new Error(`Serveur images indispo (${r.status})`);
   const j = await r.json();
+  if (!j.baseUrl) throw new Error('Réponse serveur images invalide');
   const base = j.baseUrl;
   const hash = j.chapter.hash;
   const files = quality === 'data' ? j.chapter.data : j.chapter.dataSaver;
@@ -486,8 +486,15 @@ async function getPages(chapterId, quality) {
 }
 
 async function urlToDataUrl(url) {
-  const r = await apiFetch(url);
-  if (!r.ok) throw new Error('Image inaccessible');
+  // Essaie direct d'abord (évite le proxy pour les images = + rapide)
+  let r;
+  try {
+    r = await fetch(url);
+    if (!r.ok) throw new Error();
+  } catch(e) {
+    r = await fetch(P(url));
+    if (!r.ok) throw new Error('Image inaccessible');
+  }
   const blob = await r.blob();
   return new Promise((res, rej) => {
     const fr = new FileReader();
@@ -509,41 +516,43 @@ function imgDims(dataUrl) {
 // ── PDF BUILD ─────────────────────────────────────────────────────────────────
 
 async function buildPdf(title, chapters, onProg) {
+  if (!window.jspdf) throw new Error('jsPDF non chargé — recharge la page');
   const { jsPDF } = window.jspdf;
-  // Start with a dummy page, we'll reset on first real image
-  const doc = new jsPDF({ unit: 'px', compress: true });
 
   let totalPages = chapters.reduce((a, c) => a + c.pages.length, 0);
+  if (totalPages === 0) throw new Error('Aucune page trouvée');
+
   let done = 0;
-  let first = true;
+  let doc = null;
 
   for (const ch of chapters) {
     for (let i = 0; i < ch.pages.length; i++) {
       onProg(`Ch.${ch.num} — page ${i+1}/${ch.pages.length}`, (done / totalPages) * 100);
+
       try {
         const dataUrl = await urlToDataUrl(ch.pages[i]);
         const { w, h } = await imgDims(dataUrl);
-        const pw = Math.min(w, 1080);
+        const pw = Math.min(w, 900);
         const ph = Math.round(pw * h / w);
+        const fmt = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
 
-        if (first) {
-          doc.internal.pageSize.width = pw;
-          doc.internal.pageSize.height = ph;
-          first = false;
+        if (!doc) {
+          doc = new jsPDF({ unit: 'px', compress: true, format: [pw, ph] });
+          doc.addImage(dataUrl, fmt, 0, 0, pw, ph);
         } else {
           doc.addPage([pw, ph]);
+          doc.addImage(dataUrl, fmt, 0, 0, pw, ph);
         }
-
-        const fmt = dataUrl.startsWith('data:image/png') ? 'PNG' : 'JPEG';
-        doc.addImage(dataUrl, fmt, 0, 0, pw, ph);
       } catch(e) {
-        console.warn('Page skippée', e);
+        console.warn('Page skippée:', ch.pages[i], e.message);
       }
+
       done++;
-      await sleep(30);
+      await sleep(50);
     }
   }
 
+  if (!doc) throw new Error('Aucune image chargée — vérifie ta connexion');
   return doc.output('blob');
 }
 
