@@ -45,12 +45,33 @@ html, body {
 }
 .logo {
   font-family: 'Bebas Neue', sans-serif;
-  font-size: 32px;
-  letter-spacing: 3px;
-  color: var(--accent);
+  font-size: 34px;
+  letter-spacing: 4px;
   line-height: 1;
+  display: flex;
+  align-items: center;
+  gap: 2px;
 }
-.logo span { color: var(--accent2); }
+.logo-manga {
+  color: #ffffff;
+  text-shadow: 0 0 20px rgba(255,255,255,0.15);
+}
+.logo-load {
+  color: #e02020;
+  text-shadow: 0 0 20px rgba(224,32,32,0.4);
+  position: relative;
+}
+.logo-load::after {
+  content: '';
+  position: absolute;
+  bottom: 2px;
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: #e02020;
+  border-radius: 2px;
+  box-shadow: 0 0 8px rgba(224,32,32,0.7);
+}
 .badge {
   background: rgba(232,197,71,0.1);
   border: 1px solid rgba(232,197,71,0.25);
@@ -267,7 +288,7 @@ select { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns
 <body>
 
 <div class="header">
-  <div class="logo">Manga<span>Load</span></div>
+  <div class="logo"><span class="logo-manga">Manga</span><span class="logo-load">Load</span></div>
   <div class="badge">MangaDex</div>
 </div>
 
@@ -278,12 +299,13 @@ select { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns
     <div class="field">
       <label>URL ou ID MangaDex</label>
       <div class="search-row">
-        <input type="url" id="manga-url" placeholder="https://mangadex.org/title/…" autocomplete="off" autocorrect="off" spellcheck="false"/>
+        <input type="text" id="manga-url" placeholder="https://mangadex.org/title/…" autocomplete="off" autocorrect="off" spellcheck="false"/>
         <button class="btn btn-ghost" id="btn-search">Chercher</button>
       </div>
     </div>
 
     <!-- Manga card -->
+    <div id="manga-found-label" style="display:none;font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:1.5px;color:#e02020;animation:slideIn 0.3s ease;">✓ Trouvé kekek</div>
     <div id="manga-info">
       <img id="manga-cover" src="" alt="cover"/>
       <div class="manga-meta">
@@ -359,15 +381,46 @@ select { cursor: pointer; background-image: url("data:image/svg+xml,%3Csvg xmlns
 // ── UTILS ─────────────────────────────────────────────────────────────────────
 
 const BASE = 'https://api.mangadex.org';
-// Proxy CORS pour contourner les restrictions GitHub Pages
-const P = (url) => `https://corsproxy.io/?url=${encodeURIComponent(url)}`;
+const PROXY = 'https://corsproxy.io/?url=';
+const P = (url) => `${PROXY}${encodeURIComponent(url)}`;
+
+// Fetch avec timeout et fallback direct
+async function apiFetch(url, timeout = 10000) {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeout);
+  try {
+    // Essaie d'abord direct (marche sur certains hébergeurs)
+    const r = await fetch(url, { signal: controller.signal });
+    clearTimeout(timer);
+    if (r.ok) return r;
+  } catch(e) { clearTimeout(timer); }
+
+  // Fallback proxy
+  const controller2 = new AbortController();
+  const timer2 = setTimeout(() => controller2.abort(), timeout);
+  try {
+    const r2 = await fetch(P(url), { signal: controller2.signal });
+    clearTimeout(timer2);
+    if (r2.ok) return r2;
+    throw new Error(`API error ${r2.status}`);
+  } catch(e) {
+    clearTimeout(timer2);
+    if (e.name === 'AbortError') throw new Error('Timeout — vérifie ta connexion');
+    throw e;
+  }
+}
 
 function extractId(input) {
-  input = (input || '').trim();
-  const url = input.match(/mangadex\.org\/title\/([a-f0-9-]{36})/i);
+  input = (input || '').trim().replace(/\s+/g, '');
+  // URL complète mangadex
+  const url = input.match(/mangadex\.org\/title\/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
   if (url) return url[1];
-  const uuid = input.match(/[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}/i);
-  if (uuid) return uuid[0];
+  // UUID seul
+  const uuid = input.match(/^([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})$/i);
+  if (uuid) return uuid[1];
+  // UUID n'importe où dans le texte
+  const any = input.match(/([a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12})/i);
+  if (any) return any[1];
   return null;
 }
 
@@ -393,8 +446,7 @@ function showProgress(v) {
 // ── MANGADEX API ──────────────────────────────────────────────────────────────
 
 async function getMangaInfo(id) {
-  const r = await fetch(P(`${BASE}/manga/${id}?includes[]=cover_art`));
-  if (!r.ok) throw new Error(`Manga introuvable — vérifie l'ID (${r.status})`);
+  const r = await apiFetch(`${BASE}/manga/${id}?includes[]=cover_art`);
   const j = await r.json();
   if (!j.data) throw new Error('Réponse API invalide');
   const d = j.data;
@@ -411,7 +463,7 @@ async function getChapters(mangaId, lang) {
   while (true) {
     // MangaDex API requires repeated params for arrays, URLSearchParams doesn't handle this correctly
     const url = `${BASE}/chapter?manga=${mangaId}&translatedLanguage[]=${lang}&limit=100&offset=${offset}&order[chapter]=asc`;
-    const r = await fetch(P(url));
+    const r = await apiFetch(url);
     if (!r.ok) throw new Error(`Erreur chapitres (${r.status})`);
     const j = await r.json();
     all = all.concat(j.data);
@@ -423,7 +475,7 @@ async function getChapters(mangaId, lang) {
 }
 
 async function getPages(chapterId, quality) {
-  const r = await fetch(P(`${BASE}/at-home/server/${chapterId}`));
+  const r = await apiFetch(`${BASE}/at-home/server/${chapterId}`);
   if (!r.ok) throw new Error(`Serveur images indispo (${r.status})`);
   const j = await r.json();
   const base = j.baseUrl;
@@ -434,7 +486,7 @@ async function getPages(chapterId, quality) {
 }
 
 async function urlToDataUrl(url) {
-  const r = await fetch(P(url));
+  const r = await apiFetch(url);
   if (!r.ok) throw new Error('Image inaccessible');
   const blob = await r.blob();
   return new Promise((res, rej) => {
@@ -504,13 +556,14 @@ let state = { mangaId: null, title: null, chapters: [] };
 document.getElementById('btn-search').addEventListener('click', async () => {
   const raw = document.getElementById('manga-url').value;
   const id = extractId(raw);
-  if (!id) { setStatus('⚠ URL ou ID invalide', 'error'); return; }
+  if (!id) { setStatus('❌ Inconnu au bataillon — ID non détecté dans : "' + raw.slice(0,60) + '"', 'error'); return; }
 
   const btn = document.getElementById('btn-search');
   btn.innerHTML = '<div class="spinner spinner-accent"></div>';
   btn.disabled = true;
   setStatus('');
   document.getElementById('manga-info').classList.remove('show');
+  document.getElementById('manga-found-label').style.display = 'none';
   document.getElementById('btn-download').disabled = true;
   showProgress(false);
 
@@ -530,6 +583,7 @@ document.getElementById('btn-search').addEventListener('click', async () => {
       `${state.chapters.length} chapitre(s) · ${lang.toUpperCase()}`;
     if (info.coverUrl) document.getElementById('manga-cover').src = info.coverUrl;
     document.getElementById('manga-info').classList.add('show');
+    document.getElementById('manga-found-label').style.display = 'block';
 
     // Auto-range
     const nums = state.chapters.map(c => parseFloat(c.attributes.chapter)).filter(n => !isNaN(n));
@@ -546,7 +600,7 @@ document.getElementById('btn-search').addEventListener('click', async () => {
     if (state.chapters.length > 0) document.getElementById('btn-download').disabled = false;
 
   } catch(e) {
-    setStatus('❌ ' + e.message, 'error');
+    setStatus('❌ Inconnu au bataillon — ' + e.message, 'error');
   } finally {
     btn.innerHTML = 'Chercher';
     btn.disabled = false;
