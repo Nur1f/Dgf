@@ -392,8 +392,9 @@ function showProgress(v) {
 
 async function getMangaInfo(id) {
   const r = await fetch(`${BASE}/manga/${id}?includes[]=cover_art`);
-  if (!r.ok) throw new Error(`Manga introuvable (${r.status})`);
+  if (!r.ok) throw new Error(`Manga introuvable — vérifie l'ID (${r.status})`);
   const j = await r.json();
+  if (!j.data) throw new Error('Réponse API invalide');
   const d = j.data;
   const title = d.attributes.title.fr || d.attributes.title.en || Object.values(d.attributes.title)[0] || 'Sans titre';
   const coverRel = d.relationships.find(x => x.type === 'cover_art');
@@ -406,8 +407,9 @@ async function getMangaInfo(id) {
 async function getChapters(mangaId, lang) {
   let all = [], offset = 0;
   while (true) {
-    const p = new URLSearchParams({ manga: mangaId, 'translatedLanguage[]': lang, limit: 100, offset, 'order[chapter]': 'asc' });
-    const r = await fetch(`${BASE}/chapter?${p}`);
+    // MangaDex API requires repeated params for arrays, URLSearchParams doesn't handle this correctly
+    const url = `${BASE}/chapter?manga=${mangaId}&translatedLanguage[]=${lang}&limit=100&offset=${offset}&order[chapter]=asc`;
+    const r = await fetch(url);
     if (!r.ok) throw new Error(`Erreur chapitres (${r.status})`);
     const j = await r.json();
     all = all.concat(j.data);
